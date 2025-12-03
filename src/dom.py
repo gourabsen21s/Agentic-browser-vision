@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DOMElement:
     node_id: int
-    backend_node_id: int
+    backend_node_id: Optional[int]
     tag_name: str
     attributes: Dict[str, str]
     text_content: str
@@ -26,6 +26,7 @@ class DomService:
         self.cdp_session: Optional[CDPSession] = None
         # Cache to store the element map for the current step
         self.selector_map: Dict[int, DOMElement] = {}
+        self.all_elements: List[DOMElement] = []
 
     async def _ensure_cdp_session(self):
         if not self.cdp_session:
@@ -54,8 +55,8 @@ class DomService:
 
         # 2. Parse and Index
         self.selector_map = {} # Reset cache
-        elements = self._parse_snapshot(snapshot)
-        interactive_elements = self._filter_interactive_elements(elements)
+        self.all_elements = self._parse_snapshot(snapshot) # Store all elements for recursion
+        interactive_elements = self._filter_interactive_elements(self.all_elements)
         
         # 3. Serialize
         return self._serialize_dom(interactive_elements)
@@ -72,6 +73,9 @@ class DomService:
 
         element = self.selector_map[index]
         
+        if not element.backend_node_id:
+             raise ValueError(f"Element {index} has no backend_node_id and cannot be clicked.")
+
         try:
             # 1. Resolve the backend_node_id to a RemoteObject
             remote_object = await self.cdp_session.send(
@@ -121,7 +125,12 @@ class DomService:
             layout_styles = layout.get('styles', [])
             node_to_layout_index = {node_idx: i for i, node_idx in enumerate(layout_node_indices)}
 
-            for i, backend_id in enumerate(backend_node_ids):
+            # First pass: Create all elements
+            temp_elements = []
+            # Iterate over node_names as it should contain all nodes
+            for i in range(len(node_names)):
+                backend_id = backend_node_ids[i] if i < len(backend_node_ids) else None
+                
                 # Attributes
                 attrs = {}
                 if i < len(attributes_list):
@@ -151,7 +160,16 @@ class DomService:
                     is_scrollable=False,
                     parent_id=parent_indices[i] if i < len(parent_indices) and parent_indices[i] >= 0 else None
                 )
-                parsed_elements.append(element)
+                temp_elements.append(element)
+            
+            # Second pass: Build parent-child relationships
+            # We need to map node_id to the element object
+            # Since node_id is just the index in the list, we can access directly
+            for el in temp_elements:
+                if el.parent_id is not None and 0 <= el.parent_id < len(temp_elements):
+                    temp_elements[el.parent_id].children_ids.append(el.node_id)
+            
+            parsed_elements.extend(temp_elements)
 
         return parsed_elements
 
@@ -199,3 +217,49 @@ class DomService:
             lines.append(line)
             
         return "\n".join(lines)
+
+    def _get_full_text(self, element: DOMElement) -> str:
+        """
+        Recursively aggregates text from the element and its children.
+        """
+        text_parts = []
+        
+        # Add own text
+        if element.text_content:
+            text_parts.append(element.text_content)
+            
+        # Recurse children
+        for child_id in element.children_ids:
+            if 0 <= child_id < len(self.all_elements):
+                child = self.all_elements[child_id]
+                text_parts.append(self._get_full_text(child))
+                
+        return " ".join(part.strip() for part in text_parts if part.strip())
+
+    def get_element_by_index(self, index: int, level: int = 0) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves the details of an element by its [i_xxx] index.
+        If level > 0, returns the details of the N-th ancestor.
+        """
+        if index not in self.selector_map:
+            return None
+            
+        el = self.selector_map[index]
+        
+        # Traverse up 'level' times
+        target_el = el
+        for _ in range(level):
+            if target_el.parent_id is not None and 0 <= target_el.parent_id < len(self.all_elements):
+                target_el = self.all_elements[target_el.parent_id]
+            else:
+                break
+                
+        full_text = self._get_full_text(target_el)
+        
+        return {
+            "tag_name": target_el.tag_name,
+            "text_content": full_text,
+            "attributes": target_el.attributes,
+            "is_visible": target_el.is_visible,
+            "children_ids": target_el.children_ids
+        }

@@ -36,9 +36,15 @@ async def main():
         page = await context.new_page()
 
         # Define the Task
-        target_url = "https://"
-        task = f"Navigate to {target_url}. Scrape the first 3 products you see. Return them in the specified JSON format."
-
+        target_url = "https://webscraper.io/test-sites/e-commerce/allinone"
+        task = f"""
+    Navigate to {target_url}.
+    Scrape the first 3 products.
+    Return the data in the specified JSON format.
+    
+    Hint: The price is likely in the product container, not the link itself. 
+    Use `get_element(index, level=2)` to get the full product card text.
+    """
         print(f"🚀 Starting Custom CodeAgent (Azure OpenAI)...")
         print(f"🎯 Task: {task}\n")
 

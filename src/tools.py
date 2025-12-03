@@ -34,12 +34,28 @@ class Toolset:
             logger.error(f"Navigation failed: {e}")
             raise
 
-    async def _click(self, index: int):
+    def _parse_index(self, index: Any) -> int:
+        """
+        Parses an index that might be an int, string "12", string "i_12", or string "[i_12]".
+        """
+        if isinstance(index, int):
+            return index
+        
+        if isinstance(index, str):
+            # Remove common artifacts
+            clean = index.replace("[", "").replace("]", "").replace("i_", "").strip()
+            if clean.isdigit():
+                return int(clean)
+                
+        raise ValueError(f"Invalid index format: {index}")
+
+    async def _click(self, index: Any):
         """
         Clicks an element by its [i_xxx] index using the DOM service's CDP logic.
         """
-        logger.info(f"🖱️ Clicking index [{index}]")
-        await self.dom.click_element(index)
+        idx = self._parse_index(index)
+        logger.info(f"🖱️ Clicking index [{idx}]")
+        await self.dom.click_element(idx)
         
         # Small pause to allow UI to react (standard practice in scraping)
         await asyncio.sleep(1)
@@ -83,16 +99,17 @@ class Toolset:
             logger.error(f"JS Evaluation failed: {e}")
             raise
 
-    async def _input_text(self, index: int, text: str):
+    async def _input_text(self, index: Any, text: str):
         """Inputs text into a field identified by index."""
-        logger.info(f"⌨️ Inputting text into [{index}]: {text}")
+        idx = self._parse_index(index)
+        logger.info(f"⌨️ Inputting text into [{idx}]: {text}")
         
         # We need a robust way to input text. 
         # Since we use CDP for clicking, we can try Playwright locator for typing 
         # if we can resolve the selector, OR use CDP.
         # For consistency, let's use the DOM service click to focus, then keyboard.
         
-        await self.dom.click_element(index)
+        await self.dom.click_element(idx)
         await self.page.keyboard.type(text)
 
     async def _done(self, result: Dict[str, Any]):
@@ -100,6 +117,14 @@ class Toolset:
         logger.info("✅ DONE SIGNAL RECEIVED")
         self.is_done = True
         self.final_result = result
+
+    async def _get_element(self, index: Any, level: int = 0):
+        """
+        Returns the details of an element by its [i_xxx] index.
+        Useful for scraping text and attributes without guessing JS selectors.
+        """
+        idx = self._parse_index(index)
+        return self.dom.get_element_by_index(idx, level)
 
     def get_globals(self) -> Dict[str, Any]:
         """
@@ -110,6 +135,7 @@ class Toolset:
             "click": self._click,
             "input_text": self._input_text,
             "evaluate": self._evaluate,
+            "get_element": self._get_element,
             "done": self._done,
             
             # Utilities
