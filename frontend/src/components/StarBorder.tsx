@@ -27,21 +27,20 @@ export default function StarBorder<T extends React.ElementType = 'button'>({
       className={`star-border-container ${className}`}
       {...(rest as React.ComponentPropsWithoutRef<T>)}
       style={{
-        padding: `${thickness}px 0`,
         ...(rest as { style?: React.CSSProperties }).style
       }}
     >
       <div
         className="border-gradient-bottom"
         style={{
-          background: `radial-gradient(circle, ${color}, transparent 10%)`,
+          background: `linear-gradient(90deg, transparent, ${color}, transparent)`,
           animationDuration: speed
         }}
       />
       <div
         className="border-gradient-top"
         style={{
-          background: `radial-gradient(circle, ${color}, transparent 10%)`,
+          background: `linear-gradient(90deg, transparent, ${color}, transparent)`,
           animationDuration: speed
         }}
       />
