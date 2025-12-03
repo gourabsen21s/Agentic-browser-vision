@@ -24,21 +24,71 @@ class BrowserSession:
         
         args = self.profile.get_playwright_args()
         
-        self.browser = await self.playwright.chromium.launch(
-            headless=self.profile.headless,
-            args=args,
-            proxy=self.profile.proxy
-        )
+        # Select browser engine
+        if self.profile.browser_type == "firefox":
+            browser_type = self.playwright.firefox
+        elif self.profile.browser_type == "webkit":
+            browser_type = self.playwright.webkit
+        else:
+            browser_type = self.playwright.chromium
+
+        if self.profile.user_data_dir:
+            logger.info(f"Launching persistent context with user_data_dir: {self.profile.user_data_dir}")
+            # Persistent context is only fully supported on Chromium in this setup for now
+            # For Firefox/WebKit, we might need different handling or accept limitations
+            if self.profile.browser_type != "chromium":
+                 logger.warning("Persistent context is best supported on Chromium. Behavior on other engines may vary.")
+
+            self.context = await browser_type.launch_persistent_context(
+                user_data_dir=self.profile.user_data_dir,
+                headless=self.profile.headless,
+                args=args,
+                proxy=self.profile.proxy,
+                viewport=self.profile.viewport.model_dump(),
+                user_agent=self.profile.user_agent,
+                accept_downloads=True,
+                ignore_default_args=["--enable-automation"] if self.profile.browser_type == "chromium" else None
+            )
+            # persistent context has one page by default
+            self.page = self.context.pages[0]
+            self.browser = None # Browser object is not exposed in persistent context mode in the same way
+        else:
+            logger.info(f"Launching ephemeral browser ({self.profile.browser_type})")
+            self.browser = await browser_type.launch(
+                headless=self.profile.headless,
+                args=args,
+                proxy=self.profile.proxy,
+                ignore_default_args=["--enable-automation"] if self.profile.browser_type == "chromium" else None
+            )
+            
+            self.context = await self.browser.new_context(
+                viewport=self.profile.viewport.model_dump(),
+                user_agent=self.profile.user_agent,
+                accept_downloads=True
+            )
+            self.page = await self.context.new_page()
         
-        self.context = await self.browser.new_context(
-            viewport=self.profile.viewport.model_dump(),
-            user_agent=self.profile.user_agent,
-            accept_downloads=True
-        )
-        
-        self.page = await self.context.new_page()
         self.dom_service = CDPDomService(self.page)
+        
+        # Setup resource blocking if enabled
+        if self.profile.block_resources:
+            await self._setup_resource_blocking()
+            
         logger.info("Browser session started")
+
+    async def _setup_resource_blocking(self):
+        """Sets up routing to block unnecessary resources."""
+        if not self.context:
+            return
+            
+        async def route_handler(route):
+            if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
+                await route.abort()
+            else:
+                await route.continue_()
+                
+        await self.context.route("**/*", route_handler)
+        logger.info("Resource blocking enabled (images, media, fonts, stylesheets)")
 
     async def close(self):
         """Closes the browser session."""
@@ -56,9 +106,9 @@ class BrowserSession:
         await self.page.goto(url)
         await self.page.wait_for_load_state("networkidle")
 
-    async def get_state(self) -> BrowserState:
+    async def get_state(self, include_screenshot: bool = False) -> BrowserState:
         """Legacy method for backward compatibility."""
-        summary = await self.get_browser_state_summary()
+        summary = await self.get_browser_state_summary(include_screenshot=include_screenshot)
         return BrowserState(
             url=summary.url,
             title=summary.title,
