@@ -109,7 +109,7 @@ graph TD
     Main --> Agent
     
     subgraph "Agent Core"
-        Agent -->|Think| LLM[Azure OpenAI (GPT-4)]
+        Agent -->|Think| LLM["Azure OpenAI (GPT-4)"]
         Agent -->|Act| Tools[Toolset]
         Tools -->|Control| Session[BrowserSession]
     end
