@@ -92,31 +92,85 @@ The new `BrowserProfile` system allows detailed customization:
 
 ## 🏗️ Architecture
 
-1.  **Perception Layer**:
-    *   Captures screenshot.
-    *   **YOLOv8** detects UI bounding boxes.
-    *   **OCR** extracts text content.
-2.  **Reasoning Layer**:
-    *   Constructs a prompt with the user goal and UI elements.
-    *   **LLM** (GPT-4) generates a structured action plan (JSON).
-3.  **Execution Layer**:
-    *   **ActionExecutor** maps the plan to Playwright commands.
-    *   Performs clicks, typing, scrolling, or navigation.
-4.  **Loop**:
-    *   Repeats until the goal is achieved or max steps reached.
+The system follows a cyclic **Perception-Reasoning-Action** loop, orchestrated by the `SessionManager`.
+
+```mermaid
+graph TD
+    User[User Goal] --> Runner
+    
+    subgraph "Browser Runner"
+        Runner[Agent Runner] --> SM[Session Manager]
+        SM --> BM[Browser Manager]
+        BM --> Browser[Playwright Browser]
+        
+        Browser -- Screenshot --> Perception
+        
+        subgraph "Perception Layer"
+            Perception[YOLO Perception]
+            YOLO[YOLOv8 Model]
+            OCR[Tesseract OCR]
+            Perception --> YOLO
+            Perception --> OCR
+        end
+        
+        Perception -- UI Elements --> Reasoner
+        
+        subgraph "Reasoning Layer"
+            Reasoner[LLM Reasoner]
+            Prompt[Prompt Builder]
+            LLM[Azure OpenAI GPT-4]
+            Reasoner --> Prompt
+            Prompt --> LLM
+        end
+        
+        LLM -- Action Plan (JSON) --> Executor
+        
+        subgraph "Execution Layer"
+            Executor[Action Executor]
+            Executor --> Browser
+        end
+    end
+```
+
+### Data Flow
+1.  **Initialization**: `BrowserManager` launches a configured browser instance using `BrowserProfile`.
+2.  **Observation**: `SessionManager` captures a screenshot of the current page.
+3.  **Perception**: 
+    *   `YOLOPerception` detects UI elements (buttons, inputs, etc.) and their bounding boxes.
+    *   OCR extracts text from these regions to provide semantic context.
+4.  **Reasoning**: 
+    *   `Reasoner` constructs a prompt containing the user goal, detected elements, and action history.
+    *   LLM generates a structured JSON action (e.g., `{"action": "click", "target": {"by": "id", "value": "search_btn"}}`).
+5.  **Execution**: `ActionExecutor` translates the JSON action into Playwright commands to interact with the page.
 
 ## 📂 Project Structure
 
-```
+```text
 browser-runner/
-├── api/                # FastAPI server endpoints
-├── reasoner/           # LLM interaction & prompt engineering
-├── runner/             # Core execution logic
-│   ├── perception/     # YOLO & OCR modules
-│   ├── browser_manager.py # Browser lifecycle management
-│   └── browser_profile.py # Browser configuration models
-├── scripts/            # CLI entry points
-└── tests/              # Unit & integration tests
+├── api/                        # FastAPI server for remote control
+│   ├── routes/                 # API endpoints (plan_execute, session, etc.)
+│   └── main.py                 # Server entry point
+├── reasoner/                   # AI Reasoning Module
+│   ├── prompts/                # Prompt templates and few-shot examples
+│   ├── reasoner.py             # Core reasoning logic & LLM integration
+│   └── schemas.py              # Pydantic models for Action/Target
+├── runner/                     # Core Execution Engine
+│   ├── perception/             # Computer Vision Module
+│   │   ├── yolo_perception.py  # YOLOv8 + OCR implementation
+│   │   └── ui_element.py       # UI Element data models
+│   ├── browser_manager.py      # Browser lifecycle & health monitoring
+│   ├── browser_profile.py      # Advanced browser configuration
+│   ├── session_manager.py      # Session state & artifact management
+│   ├── action_executor.py      # Playwright action implementation
+│   ├── config.py               # Global configuration
+│   └── logger.py               # Structured logging
+├── scripts/                    # CLI Tools
+│   └── run_agent.py            # Main entry point for running the agent
+├── tests/                      # Test Suite
+│   └── test_browser_profile.py # Configuration tests
+├── models/                     # ML Models
+│   └── web_detect_best_m.pt    # Fine-tuned YOLO weights
+└── artifacts/                  # Session outputs (screenshots, videos, logs)
 ```
 
 ---
