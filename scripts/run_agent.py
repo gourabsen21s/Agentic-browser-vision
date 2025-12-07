@@ -81,18 +81,16 @@ async def run_agent(goal: str, url: str = None):
             print(f"Action: {action_schema.action} {action_schema.target} {action_schema.value or ''}")
             
             if action_schema.action == "noop":
-                # Check if task is truly complete based on confidence and URL
-                is_search_complete = "search" in current_url.lower() or "q=" in current_url.lower()
                 high_confidence = action_schema.confidence >= 0.9
                 
-                # Allow noop if URL confirms completion OR if we have enough actions
-                if high_confidence and (is_search_complete or len(history) >= 3):
-                    print(f"Goal achieved! URL: {current_url[:60]}...")
-                    break
-                elif len(history) < 2:
+                # For complex multi-step tasks, require more actions before trusting noop
+                if len(history) < 2:
                     print(f"Warning: Noop returned too early (only {len(history)} actions). Continuing...")
                     await asyncio.sleep(2)
                     continue
+                elif high_confidence and len(history) >= 3:
+                    print(f"Goal achieved! (confidence: {action_schema.confidence}, actions: {len(history)})")
+                    break
                 else:
                     print("Goal achieved or no action possible.")
                     break
@@ -113,17 +111,23 @@ async def run_agent(goal: str, url: str = None):
             if action_schema.action == "navigate":
                 await executor.navigate(val)
             elif action_schema.action == "click":
+                click_result = None
                 if target.by == "coords":
                     x, y = map(int, target.value.split(","))
-                    await executor.click_xy(x, y)
+                    click_result = await executor.click_xy(x, y)
                 elif target.by == "id":
                     # find element
                     el = next((e for e in elements_list if e["id"] == target.value), None)
                     if el:
                         x1, y1, x2, y2 = el["bbox"]
-                        await executor.click_xy((x1+x2)//2, (y1+y2)//2)
+                        click_result = await executor.click_xy((x1+x2)//2, (y1+y2)//2)
                 elif target.by == "selector":
                     await executor.click_selector(target.value)
+                
+                # Sync page reference if executor switched to new tab
+                if click_result and click_result.get("new_tab"):
+                    page = executor.page
+                    print(f"Switched to new tab: {page.url[:60]}...")
             elif action_schema.action == "type":
                 if target.by == "selector":
                     await executor.type_selector(target.value, val)
