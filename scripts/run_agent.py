@@ -41,8 +41,9 @@ async def run_agent(goal: str, url: str = None):
             await executor.navigate(url, timeout_ms=30000)
         
         # Loop
-        max_steps = 10
+        max_steps = 25  # Increased from 10 for complex multi-step tasks
         history = []
+        prev_element_count = 0
         
         for step in range(1, max_steps + 1):
             print(f"\n--- Step {step} ---")
@@ -53,16 +54,48 @@ async def run_agent(goal: str, url: str = None):
             # 2. Perception
             elements = perception.analyze(screenshot_path)
             elements_list = [e.dict() for e in elements]
-            print(f"Perception: Found {len(elements)} elements")
+            current_element_count = len(elements)
+            print(f"Perception: Found {current_element_count} elements")
             
-            # 3. Reasoner
+            # 3. Get page context for better reasoning
+            current_url = page.url
+            page_title = await page.title()
+            element_count_change = current_element_count - prev_element_count
+            
+            page_context = {
+                "current_url": current_url,
+                "page_title": page_title,
+                "element_count": current_element_count,
+                "prev_element_count": prev_element_count,
+                "element_count_change": element_count_change,
+                "step_number": step
+            }
+            print(f"Page: {current_url[:80]}... | Elements: {prev_element_count} → {current_element_count} ({element_count_change:+d})")
+            
+            # Update for next iteration
+            prev_element_count = current_element_count
+            
+            # 4. Reasoner with page context
             print("Reasoning...")
-            action_schema = reasoner.plan_one(goal, elements_list, last_actions=history)
+            action_schema = reasoner.plan_one(goal, elements_list, last_actions=history, page_context=page_context)
             print(f"Action: {action_schema.action} {action_schema.target} {action_schema.value or ''}")
             
             if action_schema.action == "noop":
-                print("Goal achieved or no action possible.")
-                break
+                # Check if task is truly complete based on confidence and URL
+                is_search_complete = "search" in current_url.lower() or "q=" in current_url.lower()
+                high_confidence = action_schema.confidence >= 0.9
+                
+                # Allow noop if URL confirms completion OR if we have enough actions
+                if high_confidence and (is_search_complete or len(history) >= 3):
+                    print(f"Goal achieved! URL: {current_url[:60]}...")
+                    break
+                elif len(history) < 2:
+                    print(f"Warning: Noop returned too early (only {len(history)} actions). Continuing...")
+                    await asyncio.sleep(2)
+                    continue
+                else:
+                    print("Goal achieved or no action possible.")
+                    break
                 
             # 4. Execute
             # (Simplified execution logic matching plan_execute.py)
@@ -99,10 +132,30 @@ async def run_agent(goal: str, url: str = None):
                      if el:
                         x1, y1, x2, y2 = el["bbox"]
                         await executor.type_xy((x1+x2)//2, (y1+y2)//2, val)
-            # ... add other actions as needed ...
+            elif action_schema.action == "scroll":
+                await executor.scroll(0, 500)
+            elif action_schema.action == "press_key":
+                key = val or "Enter"
+                await executor.press_key(key)
+            elif action_schema.action == "hover":
+                if target and target.by == "id":
+                    el = next((e for e in elements_list if e["id"] == target.value), None)
+                    if el:
+                        x1, y1, x2, y2 = el["bbox"]
+                        await executor.hover((x1+x2)//2, (y1+y2)//2)
             
             history.append({"action": action_schema.dict()})
-            await asyncio.sleep(1) # brief pause
+            
+            # Wait for page to stabilize after page-changing actions
+            if action_schema.action in ("click", "navigate", "press_key", "type"):
+                print("Waiting for page to stabilize...")
+                await asyncio.sleep(2.0)  # Allow time for page transitions
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=3000)
+                except:
+                    pass  # Continue even if timeout
+            else:
+                await asyncio.sleep(0.5)  # Brief pause for other actions
             
     except Exception as e:
         print(f"Error: {e}")
